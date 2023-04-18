@@ -10,9 +10,9 @@
 .org $000
 	JMP reset
 
-delay: ; 4 + 5x + 1282(256 - y) + 2nop
-	LDI R29, 102	; x xnew = 102
-	LDI R30, 194	; y ynew = 194
+delay: ; 1282(255 - y) + 5x + 4nop = 79993
+	LDI R29, 101	; x xnew = 101
+	LDI R30, 193	; y ynew = 193
 delay_sub:
 	NOP
 	DEC R29
@@ -20,6 +20,8 @@ delay_sub:
 	BRNE delay_sub
 	INC R30
 	BRNE delay_sub
+	NOP
+	NOP
 	NOP
 	NOP
 	RET

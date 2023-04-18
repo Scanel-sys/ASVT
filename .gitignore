@@ -1,0 +1,6 @@
+drives
+*.pdf
+*.xlsx
+*.pdsprj
+vars
+.DS_Store
