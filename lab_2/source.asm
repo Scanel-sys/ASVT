@@ -13,6 +13,7 @@
 .def DATA_2 = R12
 .def var_i = R11
 .def DELAY_LEN = R10
+.def TEMP_SREG = R9
 
 .MACRO SWP
 	PUSH @0
@@ -44,8 +45,9 @@ delay_sub:
 	nop
 	brcc delay_sub
 	RET
-
 EXT_INT0:				; changin REGIME / PD2
+	in TEMP_SREG, SREG
+	; push TMP
 	mov TMP_3, REGIME	; TMP_3 is temp REGIME
 	cpi TMP_3, 0b00110000
 	brne REGIME_NOT_CEIL
@@ -74,12 +76,12 @@ regime_main:
 	andi TMP, 0b11001111
 	or TMP, TMP_3		; PORTD | REGIME
 if_write_x_in_int0_loop:
+	cpi if_written, 1
+	breq regime_end
 	sbic PIND, 3
 	call EEWrite
 	sbic PIND, 2
 	jmp if_write_x_in_int0_loop
-	cpi if_written, 1
-	breq regime_end
 regime_case:
 	mov DATA_1, TMP_1
 	mov DATA_2, TMP_2
@@ -87,9 +89,12 @@ regime_case:
 	mov REGIME, TMP_3
 regime_end:
 	clr if_written
+	out SREG, TEMP_SREG
 	RETI
 
 EXT_INT1:		 		; changin SPEED / PD3
+	in TEMP_SREG, SREG
+	; push TMP
 	mov TMP, var_x
 	inc TMP
 	cpi TMP, 0x3
@@ -115,12 +120,12 @@ speed_main:
 	andi TMP_1, 0b11111100
 	or TMP_1, TMP		; TMP_1 | var_x
 if_write_x_in_int1_loop:
+	cpi if_written, 1
+	breq speed_end
 	sbic PIND, 2
 	call EEWrite
 	sbic PIND, 3
 	jmp if_write_x_in_int1_loop
-	cpi if_written, 1
-	breq speed_end
 speed_case:
 	mov var_x, TMP
 	mov DELAY_LEN, TMP_2
@@ -128,6 +133,8 @@ speed_case:
 	out PORTD, TMP_1
 speed_end:
 	clr if_written
+	; pop TMP
+	out SREG, TEMP_SREG
 	RETI
 read_y:
 	in TMP_1, PORTA
@@ -162,17 +169,17 @@ if_not_third_regime:
 	out  DDRC, TMP
 	ret
 EEWrite:
+	; CLI					; Затем запрещаем прерывания.
 	push TMP_1
 	push TMP_2
 	push TMP	
     LDI 	TMP_1, 0x0	; Загружаем адрес нулевой ячейки
 	LDI 	TMP_2, 0x0	; EEPROM 
 	MOV 	TMP, var_x ; и хотим записать в нее speed (var_x)
-
+EEWrite_loop:
 	SBIC EECR, EEWE		; Ждем готовности памяти к записи. Крутимся в цикле
-	RJMP EEWrite 		; до тех пор пока не очистится флаг EEWE
+	RJMP EEWrite_loop 	; до тех пор пока не очистится флаг EEWE
  
-	CLI					; Затем запрещаем прерывания.
 	OUT EEARL, TMP_1 		; Загружаем адрес нужной ячейки
 	OUT EEARH, TMP_2	; старший и младший байт адреса
 	OUT EEDR, TMP 		; и сами данные, которые нам нужно загрузить
@@ -181,10 +188,10 @@ EEWrite:
 	SBI EECR, EEWE		; записываем байт
 	
 	ldi if_written, 1
-	SEI 				; разрешаем прерывания
 	pop TMP
 	pop TMP_2
 	pop TMP_1
+	; SEI 				; разрешаем прерывания
 	RET 				; возврат из процедуры
 
 EERead:
@@ -193,9 +200,9 @@ EERead:
 	push TMP_2
     LDI 	TMP_1, 0x0	; Загружаем адрес нулевой ячейки
 	LDI 	TMP_2, 0x0	; EEPROM 
-
+EERead_loop:
 	SBIC EECR, EEWE		; Ждем пока будет завершена прошлая запись.
-	RJMP EERead			; также крутимся в цикле.
+	RJMP EERead_loop			; также крутимся в цикле.
 	
 	OUT EEARL, TMP_1		; загружаем адрес нужной ячейки
 	OUT EEARH, TMP_2 		; его старшие и младшие байты
@@ -244,7 +251,6 @@ init_board:
     ldi var_y_additional, 0b10101010
 
 	clr TMP
-	; mov var_x, TMP
 	ldi status_bit, 0b01000000
 	ldi excess_ticks, 14
 	ldi if_written, 0
