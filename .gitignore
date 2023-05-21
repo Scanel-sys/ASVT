@@ -1,6 +1,10 @@
+*.docx
 drives
 *.pdf
 *.xlsx
 *.pdsprj
 vars
 .DS_Store
+.gitignore
+lectures
+books
