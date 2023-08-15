@@ -1,41 +1,54 @@
 ;= Start 	macro.inc ========================================
-.def b0 = R24
-.def b1 = R23
-.def b2 = R22
+
+.def shift_counter = R22
 .def outValue = R21
 .def Position = R20
-.def mlsecs = R19
+.def new_shift = R19
 .def paramNumber = R18
-.def TMP_INTR = R17
+.def TMP_7SEG = R17
 .def TMP = R16
+.def b0 = R14
+.def b1 = R13
+.def b2 = R12
+.def REGIME = R11
+.def blink_counter = R10
 .def outp_4 = R9
 .def outp_3 = R8
 .def outp_2 = R7
 .def outp_1 = R6
 .def basic_shift = R5   ; d
 .def step = R4          ; h
-.def frequency = R3     ; p
 .def ONE = R2
 .def O = R1
 .def Storage = R0
 ;= End 		macro.inc ========================================
 
 ; INTERRUPT TABLE ============================================
-.org 0x000					 ; (RESET) 
-	JMP init_board
+.org 0x000					 
+	JMP init_board               ; (RESET) 
 .org 0x002
-	JMP EXT_INT0             ; (INT0) Regime changer    / PD2
+	JMP EXT_INT0                 ; (INT0) Regime changer    / PD2
 .org 0x004
-    JMP EXT_INT1			 ; (INT1) Parameter chooser / PD3
+    JMP EXT_INT1			     ; (INT1) Parameter chooser / PD3
 .org 0x008
-	JMP TIMER2COMP_INT		 ; 0,1 sec timer
+	RETI            		     ; PD7
+.org 0x00E
+	RETI                         ; PD4
+.org 0x014
+	JMP SEG7_LIGHTS_TIMER_INT	 ; 0,01 sec timer
 ; Interrupts =================================================
 EXT_INT0:
-
+    eor REGIME, ONE
+    clr TMP_7SEG
     reti
 
 EXT_INT1:
-    mov mlsecs, O
+	in Storage, SREG
+
+    cp REGIME, O
+    breq EXT_INT1_EXIT
+
+    mov new_shift, O
     inc paramNumber
     cpi paramNumber, 6
     brlt prepare_parameter_info
@@ -52,7 +65,8 @@ prepare_parameter_info:
     cpi paramNumber, 4
     breq p_param
     cpi paramNumber, 5
-    breq d_param 
+    breq d_param
+    jmp EXT_INT1_EXIT
 b0_param:
     call place_b
     mov outp_1, outValue
@@ -106,51 +120,92 @@ p_param:
     mov outp_2, O
     mov outp_3, O
     
-    mov outValue, frequency
+    mov outValue, 3
     call convert_for_7seg
     mov outp_4, outValue
     jmp EXT_INT1_EXIT
 d_param:
+
     call place_d
     call add_dot
     mov outp_1, outValue    
 
     mov outp_2, O
     mov outp_3, O
-    
-    mov outValue, basic_shift
-    call convert_for_7seg
-    mov outp_4, outValue
+
 EXT_INT1_EXIT:
+    out SREG, Storage
     reti
 
-TIMER2COMP_INT:
-	in Storage, SREG
+SEG7_LIGHTS_TIMER_INT:
+    in Storage, SREG
+    cp REGIME, ONE
+    breq SEG_7_SHOW
+    inc TMP_7SEG
+    cpi TMP_7SEG, 10
+    brlo SEG7_LIGHTS_END
+    
+    clr TMP_7SEG
+    push shift_counter
+    clr shift_counter
+LIGHTS_MAKE_SHIFT:
+    mov TMP, b0
+    rol TMP
+    rol b2
+    rol b1
+    rol b0
+    out PORTA, b0
+    out PORTB, b1
+    out PORTC, b2
+    inc shift_counter
+    cp shift_counter, step
+    brlo LIGHTS_MAKE_SHIFT
+    pop shift_counter
 
-	lsl Position
-	sbrc Position, 4
-	ldi Position, 0b00000001
+    jmp SEG7_LIGHTS_END
+SEG_7_SHOW:
+    inc blink_counter
+	lsr Position
 
 	sbrc Position, 3
 	out PORTC, outp_1
 	sbrc Position, 2
 	out PORTC, outp_2
-	sbrc Position, 1
+
+    ldi TMP_7SEG, 50
+    cp blink_counter, TMP_7SEG
+	brge skip_second_part
+display_sec_part:
+    sbrc Position, 1
 	out PORTC, outp_3
 	sbrc Position, 0
 	out PORTC, outp_4
-
-	out SREG, Storage
-	reti
+    jmp TIMER2COMP_INT_EXIT
+skip_second_part:
+    ldi TMP_7SEG, 100
+    cp blink_counter, TMP_7SEG
+    brlt TIMER2COMP_INT_EXIT
+    mov blink_counter, O
+TIMER2COMP_INT_EXIT:
+	sbrc Position, 0
+	ldi Position, 0b00010000
+SEG7_LIGHTS_END:
+    out SREG, Storage
+    reti
 
 ; END Interrupts =============================================
 
 ; Board Init =================================================
 init_board:
 
-    ; init PORTS
-    CLR TMP
-    moc O, TMP
+	; init stack
+	LDI TMP, High(RAMEND)
+	OUT SPH, TMP
+	LDI TMP, Low(RAMEND)
+	OUT SPL, TMP
+
+    ; init ports
+    clr O
     ldi TMP, 0xDF
     out DDRA, TMP
     out DDRB, O
@@ -161,26 +216,45 @@ init_board:
     out PORTC, O
 
     ; init vars
-    mov Position, O
+    ldi Position, 0b00010000
     mov b1, O
     mov b2, O
     mov basic_shift, O
     mov paramNumber, O
-    
+    mov REGIME, O
+    mov shift_counter, O
+
     LDI TMP, 1
     mov ONE, TMP
     mov b0, ONE
     mov step, ONE
 
-    LDI TMP, 3
-    mov frequency, TMP
-
-    ; init 0,01 sec timer
+	; bliding lights timer
 	LDI TMP, 0b00001101
+	OUT TCCR0, TMP
+	LDI TMP, 78                 ; ~0,01 sec
+	OUT OCR0, TMP
+	LDI TMP, 0b00000010
+	OUT TIMSK, TMP
+
+    ; init fast PWM for PD 7
+    LDI TMP, 0b01111010
 	OUT TCCR2, TMP
-	LDI TMP, 0b11111111
-	OUT OCR2, TMP
+	OUT OCR2, O
 	call turn_on_small_timer
+
+    ; init fast PWM for PD 4
+    LDI TMP, 0b00100001
+    OUT TCCR1A, TMP
+    LDI TMP, 0b00001010
+    OUT TCCR1B, TMP
+    OUT OCR1BL, O
+
+    ; ADC init
+    LDI TMP, 0b11000110
+    OUT ADCSRA, TMP
+    LDI TMP, 0b11100101 ; reading from ADCH
+	OUT ADMUX, TMP
 
     ; INTERRUPTS init
     LDI TMP, 0x0F
@@ -195,9 +269,56 @@ init_board:
 
 ; Main =======================================================
 main:
+    cp REGIME, ONE
+    breq PARAMS_REGIME
 
+    call init_lights
+LIGHTS_REGIME:
+    cp REGIME, O
+    breq LIGHTS_REGIME
+PARAMS_REGIME:
+    cpi paramNumber, 5
+    brlo main
+    cp REGIME, O
+    breq main
 
+    in TMP, ADCH
+    mov new_shift, TMP
+    lsr new_shift
+    lsr new_shift
+    lsr new_shift
+    lsr new_shift
+    lsr new_shift
+
+    out OCR1BL, TMP
+    subi TMP, 255
+    out OCR2, TMP
+
+    ldi TMP, 0b11000110
+    out ADCSRA, TMP
+
+    mov basic_shift, new_shift
+    mov outValue, basic_shift
+    call convert_for_7seg
+    mov outp_4, outValue
+    
+    jmp PARAMS_REGIME
 ; Procedures =================================================
+init_lights:
+    mov b0, ONE
+    mov b1, O
+    mov b2, O
+    clr shift_counter
+basic_shift_loop:
+    mov TMP, b0
+    rol TMP
+    rol b2
+    rol b1
+    rol b0
+    inc shift_counter
+    cp shift_counter, basic_shift
+    brlo basic_shift_loop
+    ret
 turn_off_small_timer:
 	in TMP_2, TIMSK
 	ANDI TMP_2, 0b01111111
@@ -302,4 +423,3 @@ add_dot:        ORI outValue, 0b10000000
     ret
 place_notset:	LDI outValue, 0b00001000
 	ret
-
