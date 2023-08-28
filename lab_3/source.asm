@@ -178,7 +178,6 @@ init_board:
 	OUT OCR1AH, TMP
 	LDI TMP, 0b00010010
 	OUT OCR1AL, TMP
-	call turn_on_big_timer
 
 	; init user interact info
 	clr TRIES
@@ -234,6 +233,7 @@ check_input:
 	cpi TMP, 4
 	breq check_4_inp
 check_1_inp:
+	call turn_on_big_timer
 	mov inp_1, outValue
 	cpse outValue, code1
 	jmp wrong_input
@@ -271,8 +271,8 @@ wrong_input_loop:
 	jmp wrong_input_loop
 	out PORTA, O
 	mov IF_COUNTED, O
+	call turn_off_big_timer
 	LDI REGIME, 1
-
 	call reset_input
 main_loop:
     jmp main
@@ -297,7 +297,6 @@ reset_input:
 	mov inp_2, outValue
 	mov inp_3, outValue
 	mov inp_4, outValue
-	call turn_on_big_timer
 	ret
 
 
