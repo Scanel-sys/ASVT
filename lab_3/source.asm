@@ -31,7 +31,7 @@
 .org 0x004
     JMP EXT_INT1			 ; (INT1) External Interrupt Request 1
 .ORG 0x008
-	JMP TIMER2COMP_INT		 ; (TIMER2 COMP)  Timer/Counter2 Compare Match
+	JMP TIMER2COMP_INT		 ; (TIMER2 COMP)  Timer/Counter2 Compare Match | 7seg work
 .ORG 0x00E
 	JMP TIMER1COMPA_INT      ; (TIMER1 COMPA) Timer/Counter1 Compare Match A
 ; Interrupts =================================================
@@ -143,12 +143,18 @@ EEprom_bad_input:
 ; Internal Hardware Init =======================================
 init_board:
 
+	;setting stack hight to the end of RAM
+	LDI TMP, HIGH(RAMEND)	; higher rank addr
+	OUT SPH, TMP
+	LDI TMP, LOW(RAMEND)
+	OUT SPL, TMP
+
 	clr O
 	ldi TMP, 1
 	mov ONE, TMP
 
 	; ports init
-    ldi TMP, 0b11000000
+    ldi TMP, 0b11001111
     out DDRA, TMP
     out DDRB, O
     ser TMP
@@ -161,15 +167,22 @@ init_board:
 	OUT PORTC, O
 	OUT PORTD, O
     
+	; init user interact info
+	clr TRIES
+	call notset
+	mov inp_1, outValue
+	mov inp_2, outValue
+	mov inp_3, outValue
+	mov inp_4, outValue
+    clr REGIME
+	ldi Position, 0b00000001
+
 	; Инициализация таймера на 0,01 секунду
 	LDI TMP, 0b00001101
 	OUT TCCR2, TMP
 	LDI TMP, 0b11111111
 	OUT OCR2, TMP
 	call turn_on_small_timer
-
-	; read code, if wrong format -> goto inf_loop
-    call EERead_code
 
 	; Инициализация таймера на 1 секунду
 	LDI TMP, 0b00001100
@@ -179,29 +192,28 @@ init_board:
 	LDI TMP, 0b00010010
 	OUT OCR1AL, TMP
 
-	; init user interact info
-	clr TRIES
-    clr inp_1
-    clr inp_2
-    clr inp_3
-    clr inp_4
-    clr REGIME
-    
-	;setting stack hight to the end of RAM
-	LDI TMP, HIGH(RAMEND)	; higher rank addr
-	OUT SPH, TMP
-	LDI TMP, LOW(RAMEND)
-	OUT SPL, TMP
+	; read code, if wrong format -> goto inf_loop
+    ; call EERead_code
+	ldi outValue, 3
+	call Conv
+	mov code1, outValue
 
+	ldi outValue, 3
+	call Conv
+	mov code2, outValue
+
+	ldi outValue, 0
+	call Conv
+	mov code3, outValue
+
+	ldi outValue, 1
+	call Conv
+	mov code4, outValue
+	
+	;int1
     LDI TMP, 0b00001100
     OUT MCUCR, TMP ; Настройка прерываний int1 на условие 0/1
-    LDI TMP, 0b10000000
-    OUT GICR, TMP ; Разрешение прерываний int1
-    OUT GIFR, TMP ; Предотвращение срабатывания int1 при
-    			  ; включении прерываний
 	
-	clr TMP
-    
 	SEI ; Включение прерываний
 ; End Internal Hardware Init ===================================
 
@@ -214,12 +226,12 @@ main:
 	breq pinB_zero 
 pinB_not_zero:
 	tst TMP_2
-	breq main_loop
+	brne main
 	call convert_PINB
 	jmp check_input
 pinB_zero:
 	tst TMP_2
-	breq main_loop
+	breq main
 	call convert_PINA
 check_input:
 	clr SECONDS
@@ -232,28 +244,32 @@ check_input:
 	breq check_3_inp
 	cpi TMP, 4
 	breq check_4_inp
+	jmp wrong_input
 check_1_inp:
 	call turn_on_big_timer
+	mov REGIME, ONE
 	mov inp_1, outValue
 	cpse outValue, code1
 	jmp wrong_input
-	jmp main_loop
+	jmp main
 check_2_inp:
 	mov inp_2, outValue
 	cpse outValue, code2
 	jmp wrong_input
-	jmp main_loop
+	jmp main
 check_3_inp:
 	mov inp_3, outValue
 	cpse outValue, code3
 	jmp wrong_input
-	jmp main_loop
+	jmp main
 check_4_inp:
 	mov inp_4, outValue
 	cpse outValue, code4
 	jmp wrong_input
 correct_input:
 	call turn_off_big_timer
+	call turn_on_int1
+	clr REGIME
 	LDI TMP_2, 0b10000000
 	OUT PORTA, TMP_2
 	jmp inf_loop
@@ -274,11 +290,10 @@ wrong_input_loop:
 	call turn_off_big_timer
 	LDI REGIME, 1
 	call reset_input
-main_loop:
-    jmp main
+	jmp main
 wrong_user:
-	out GICR, O
 	call turn_off_big_timer
+	clr REGIME
 	ldi TMP, 0b11000000
 	out PORTA, TMP
 	call bad_user_out
@@ -287,11 +302,14 @@ wrong_user:
 	mov inp_3, outValue
 	mov inp_4, outValue
 inf_loop:
-	jmp inf_loop
+	cp REGIME, O
+	breq inf_loop
+	jmp main
 ; Procedure ====================================================
 reset_input:
 	clr TMP
 	clr SECONDS
+	call turn_off_int1
 	call notset
 	mov inp_1, outValue
 	mov inp_2, outValue
@@ -299,28 +317,48 @@ reset_input:
 	mov inp_4, outValue
 	ret
 
+turn_on_int1:
+	push TMP
+    LDI TMP, 0b10000000
+    OUT GICR, TMP ; Разрешение прерываний int1
+    OUT GIFR, TMP ; Предотвращение срабатывания int1 при
+    			  ; включении прерываний
+	pop TMP
+	ret
+
+turn_off_int1:
+    OUT GICR, O
+    OUT GIFR, O 
+	ret
 
 turn_off_big_timer:
+	push TMP_2
 	in TMP_2, TIMSK
 	ANDI TMP_2, 0b11101111
 	OUT TIMSK, TMP_2
+	pop TMP_2
 	ret
 turn_on_big_timer:
+	push TMP_2
 	in TMP_2, TIMSK
 	ORI TMP_2, 0b00010000
 	out TIMSK, TMP_2
+	pop TMP_2
 	ret
 turn_off_small_timer:
+	push TMP_2
 	in TMP_2, TIMSK
 	ANDI TMP_2, 0b01111111
 	OUT TIMSK, TMP_2
+	pop TMP_2
 	ret
 turn_on_small_timer:
+	push TMP_2
 	in TMP_2, TIMSK
 	ORI TMP_2, 0b10000000
 	out TIMSK, TMP_2
+	pop TMP_2
 	ret
-
 
 convert_PINB:
 	cpi TMP_1, 1
@@ -339,16 +377,21 @@ convert_PINB:
 	BREQ six_inp
 	cpi TMP_1, 128
 	BREQ seven_inp
+	ldi TMP, -1
 	ret
 convert_PINA:
 	cpi TMP_2, 0b00010000		; check if == 8	
-	brne if_PA5
+	brne if_PA5_and_6
 	call eight_inp
+	ret
+if_PA5_and_6:
+	cpi TMP_2, 0b00100000
+	breq if_PA5
+	ldi TMP, -1
 	ret
 if_PA5:
 	call nine_inp					; check if == 9
 	ret
-
 
 zero:	
 	clr outValue
@@ -427,7 +470,6 @@ nine_loop:
 	sbic PINA, 5
 	jmp nine_loop
 	RET
-
 
 Conv:
 	CPI outValue, 0
