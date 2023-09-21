@@ -40,6 +40,7 @@ EXT_INT1:
 	call reset_input
 	clr TRIES
 	LDI REGIME, 1
+	clr IF_COUNTED
     reti
 
 TIMER1COMPA_INT:
@@ -176,6 +177,7 @@ init_board:
 	mov inp_4, outValue
     clr REGIME
 	ldi Position, 0b00000001
+	clr IF_COUNTED
 
 	; Инициализация таймера на 0,01 секунду
 	LDI TMP, 0b00001101
@@ -268,17 +270,17 @@ check_4_inp:
 	jmp wrong_input
 correct_input:
 	call turn_off_big_timer
-	call turn_on_int1
-	clr REGIME
 	LDI TMP_2, 0b10000000
 	OUT PORTA, TMP_2
+	call turn_on_int1
+	clr REGIME
 	jmp inf_loop
 wrong_input:
 	LDI REGIME, 2
-	LDI TMP_2, 0b01000000
-	OUT PORTA, TMP_2
 	CLR WRONG_PIN_SECONDS
 	inc TRIES
+	LDI TMP_2, 0b01000000
+	OUT PORTA, TMP_2
 	ldi TMP_1, 3
 	cp TRIES, TMP_1
 	brge wrong_user
@@ -520,3 +522,4 @@ eeprom_bad_input_output:	LDI outValue, 0b01001001
 	RET
 bad_user_out:	LDI outValue, 0b00110110
 	RET
+	
