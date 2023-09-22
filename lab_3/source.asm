@@ -37,10 +37,12 @@
 ; Interrupts =================================================
 
 EXT_INT1:
+	in Storage, SREG
 	call reset_input
 	clr TRIES
 	LDI REGIME, 1
 	clr IF_COUNTED
+	out SREG, Storage
     reti
 
 TIMER1COMPA_INT:
@@ -66,11 +68,15 @@ one_sec_timer_end:
 
 TIMER2COMP_INT:
 	in Storage, SREG
+	push TMP
 
 	lsl Position
 	sbrc Position, 4
 	ldi Position, 0b00000001
-	out PORTA, Position
+	in TMP, PORTA
+	andi TMP, 0b11110000
+	or TMP, Position
+	out PORTA, TMP
 
 	sbrc Position, 3
 	out PORTC, inp_1
@@ -81,6 +87,7 @@ TIMER2COMP_INT:
 	sbrc Position, 0
 	out PORTC, inp_4
 
+	pop TMP
 	out SREG, Storage
 	reti
 ; End Interrupts =============================================
@@ -98,37 +105,86 @@ EERead_loop:
 	SBI EECR, EERE 		; Выставляем бит чтения
 	IN TMP, EEDR 		; Забираем из регистра данных результат
 	
-	cpi TMP, 10
-	brge EEprom_bad_input
-	cpi TMP, 0
-	brlt EEprom_bad_input
+	; cpi TMP, 10
+	; brge EEprom_bad_input
+	; cpi TMP, 0
+	; brlt EEprom_bad_input
 
-	mov outValue, TMP
-	call Conv
+	; mov outValue, TMP
+	; call Conv
 
 	cpi TMP_1, 0
-	breq first_ciph
+	breq first_sec_ciph
 	cpi TMP_1, 1
-	breq sec_ciph
-	cpi TMP_1, 2
-	breq third_ciph
-	cpi TMP_1, 3
-	breq fourth_ciph
-first_ciph:
+	breq third_fourth_ciph
+	jmp EEprom_end
+first_sec_ciph:
+	mov code1, TMP
+	mov code2, TMP
+	ldi TMP, 0x0f
+	and code2, TMP
+	ldi TMP, 0xf0
+	and code1, TMP
+	mov TMP, code1
+	call shift_TMP_4_times
+	mov code1, TMP
+
+	mov TMP, code1
+	cp TMP, O
+	brlt EEprom_bad_input
+	cpi TMP, 10
+	brge EEprom_bad_input
+
+	mov TMP, code2
+	cp TMP, O
+	brlt EEprom_bad_input
+	cpi TMP, 10
+	brge EEprom_bad_input
+
+	mov outValue, code1
+	call Conv
 	mov code1, outValue
-	breq EEprom_loop_end
-sec_ciph:
+
+	mov outValue, code2
+	call Conv
 	mov code2, outValue
 	breq EEprom_loop_end
-third_ciph:
+third_fourth_ciph:
+	mov code3, TMP
+	mov code4, TMP
+	ldi TMP, 0x0f
+	and code4, TMP
+	ldi TMP, 0xf0
+	and code3, TMP
+	mov TMP, code3
+	call shift_TMP_4_times
+	mov code3, TMP
+
+	mov TMP, code3
+	cp TMP, O
+	brlt EEprom_bad_input
+	cpi TMP, 10
+	brge EEprom_bad_input
+
+	mov TMP, code4
+	cp TMP, O
+	brlt EEprom_bad_input
+	cpi TMP, 10
+	brge EEprom_bad_input
+
+	mov outValue, code3
+	call Conv
 	mov code3, outValue
-	breq EEprom_loop_end
-fourth_ciph:
+
+	mov outValue, code4
+	call Conv
 	mov code4, outValue
 EEprom_loop_end:
     inc TMP_1
-	cpi TMP_1, 4
-	brlt EERead_loop
+	cpi TMP_1, 2
+	brge EEprom_end
+jmo_to_EEREAD_LOOP:
+	jmp EERead_loop
 EEprom_end:
 	out SREG, Storage
 	ret
@@ -176,7 +232,7 @@ init_board:
 	mov inp_3, outValue
 	mov inp_4, outValue
     clr REGIME
-	ldi Position, 0b00000001
+	ldi Position, 0b00001000
 	clr IF_COUNTED
 
 	; Инициализация таймера на 0,01 секунду
@@ -195,27 +251,13 @@ init_board:
 	OUT OCR1AL, TMP
 
 	; read code, if wrong format -> goto inf_loop
-    ; call EERead_code
-	ldi outValue, 3
-	call Conv
-	mov code1, outValue
+    call EERead_code
 
-	ldi outValue, 3
-	call Conv
-	mov code2, outValue
-
-	ldi outValue, 0
-	call Conv
-	mov code3, outValue
-
-	ldi outValue, 1
-	call Conv
-	mov code4, outValue
 	
 	;int1
     LDI TMP, 0b00001100
     OUT MCUCR, TMP ; Настройка прерываний int1 на условие 0/1
-	
+	clr TMP
 	SEI ; Включение прерываний
 ; End Internal Hardware Init ===================================
 
@@ -308,6 +350,13 @@ inf_loop:
 	breq inf_loop
 	jmp main
 ; Procedure ====================================================
+shift_TMP_4_times:
+	lsr TMP
+	lsr TMP
+	lsr TMP
+	lsr TMP
+	ret
+
 reset_input:
 	clr TMP
 	clr SECONDS
