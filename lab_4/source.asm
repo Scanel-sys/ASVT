@@ -1,12 +1,15 @@
 ;= Start 	macro.inc ========================================
-
-.def shift_counter = R22
-.def outValue = R21
-.def Position = R20
-.def new_shift = R19
-.def paramNumber = R18
-.def blink_counter = R17
+.def seg7_counter = R24
+.def shift_counter = R23
+.def outValue = R22
+.def Position = R21
+.def new_shift = R20
+.def paramNumber = R19
+.def blink_counter = R18
+.def TMP_2 = R17
 .def TMP = R16
+.def outp_4_safe = R14
+.def outp_3_safe = R13
 .def step = R12
 .def b0 = R11
 .def b1 = R10
@@ -25,7 +28,7 @@
 ; INTERRUPT TABLE ============================================
 .org 0x000					 
 	JMP init_board               ; (RESET) 
-.org 0x002
+.org INT0addr
 	JMP EXT_INT0                 ; (INT0) Regime changer    / PD2
 .org 0x004
     JMP EXT_INT1			     ; (INT1) Parameter chooser / PD3
@@ -36,19 +39,21 @@
 .org 0x014
 	JMP SEG7_LIGHTS_TIMER_INT	 ; 0,01 sec timer + 0,1 sec timer
 ; Interrupts =================================================
-EXT_INT0:
+EXT_INT0:				; REGIME changer
 	in Storage, SREG
     eor REGIME, ONE
     clr blink_counter
     out SREG, Storage
     reti
 
-EXT_INT1:
+EXT_INT1:				; param chooser
 	in Storage, SREG
 
     cp REGIME, O
-    breq EXT_INT1_EXIT
-
+    brne skip_jump_to_INT1_EXIT
+jmp_to_INT1_EXIT:
+	jmp EXT_INT1_EXIT
+skip_jump_to_INT1_EXIT:
     inc paramNumber
     cpi paramNumber, 6
     brlt prepare_parameter_info
@@ -65,8 +70,8 @@ prepare_parameter_info:
     cpi paramNumber, 4
     breq p_param
     cpi paramNumber, 5
-    breq d_param
-    jmp EXT_INT1_EXIT
+    brne jmp_to_INT1_EXIT
+    jmp d_param
 b0_param:
     call place_b
     mov outp_1, outValue
@@ -106,11 +111,11 @@ h_param:
     mov outp_1, outValue   
     
     mov outp_2, O
-    mov outp_3, O
+    mov outp_3_safe, O
 
     mov outValue, step
     call convert_for_7seg
-    mov outp_4, outValue
+    mov outp_4_safe, outValue
     jmp EXT_INT1_EXIT
 p_param:
     call place_p
@@ -118,11 +123,11 @@ p_param:
     mov outp_1, outValue
     
     mov outp_2, O
-    mov outp_3, O
+    mov outp_3_safe, O
     
     ldi outValue, 3
     call convert_for_7seg
-    mov outp_4, outValue
+    mov outp_4_safe, outValue
     jmp EXT_INT1_EXIT
 d_param:
     call place_d
@@ -130,45 +135,36 @@ d_param:
     mov outp_1, outValue    
 
     mov outp_2, O
-    mov outp_3, O
+    mov outp_3_safe, O
 EXT_INT1_EXIT:
     out SREG, Storage
     reti
 
 SEG7_LIGHTS_TIMER_INT:
     in Storage, SREG
-    
+    push TMP
+    inc blink_counter
+
     cp REGIME, ONE
     breq SEG_7_SHOW
 
-    inc blink_counter
-    cpi blink_counter, 10           ; timer is ~0,01 so its too fast for garland 
-    brlo SEG7_LIGHTS_END
-    
+    cpi blink_counter, 20           ; timer is ~0,01 is too fast for garland / counting to 0,2 
+    brlt SEG7_LIGHTS_END
     clr blink_counter
+
     push shift_counter
     clr shift_counter
 
-    mov outp_1, b0
-    mov outp_2, b1
-    mov outp_3, b2
 LIGHTS_MAKE_SHIFT:
     mov TMP, b0
     rol TMP
-    rol b2
     rol b1
+    rol b2
     rol b0
-
-    or outp_1, b0
-    or outp_2, b1
-    or outp_3, b2
-    out PORTA, outp_1
-    out PORTB, outp_2
-    out PORTC, outp_3
 
     inc shift_counter
     cp shift_counter, step            ; shift size; can be changed
-    brlo LIGHTS_MAKE_SHIFT
+    brlt LIGHTS_MAKE_SHIFT
     pop shift_counter
 
     out PORTA, b0
@@ -177,30 +173,50 @@ LIGHTS_MAKE_SHIFT:
 
     jmp SEG7_LIGHTS_END
 SEG_7_SHOW:
-    inc blink_counter
 	lsr Position
+	
+	in TMP, PORTA
+	andi TMP, 0b11110000
+	or TMP, Position
+	OUT PORTA, TMP
 
+	cpi blink_counter, 50
+    brlt check_seg7_counter
+    inc seg7_counter
+    clr blink_counter
+
+check_seg7_counter:
+    cpi seg7_counter, 2
+	brge hide_34_outp
+
+unhide_34_outp:
+	mov outp_3, outp_3_safe
+	mov outp_4, outp_4_safe
+	jmp putout_to_7seg
+
+hide_34_outp:
+	clr outp_3
+	clr outp_4
+
+putout_to_7seg:
 	sbrc Position, 3
 	out PORTC, outp_1
 	sbrc Position, 2
 	out PORTC, outp_2
-
-    cpi blink_counter, 50
-	brge skip_second_part
-display_sec_part:
-    sbrc Position, 1
+	sbrc Position, 1
 	out PORTC, outp_3
 	sbrc Position, 0
 	out PORTC, outp_4
-    jmp TIMER2COMP_INT_EXIT
-skip_second_part:
-    cpi blink_counter, 100
+
+check_if_1sec_counted:
+    cpi seg7_counter, 4
     brlt TIMER2COMP_INT_EXIT
-    clr blink_counter
+    clr seg7_counter
 TIMER2COMP_INT_EXIT:
 	sbrc Position, 0
 	ldi Position, 0b00010000
 SEG7_LIGHTS_END:
+	pop TMP
     out SREG, Storage
     reti
 ; END Interrupts =============================================
@@ -213,19 +229,11 @@ init_board:
 	LDI TMP, Low(RAMEND)
 	OUT SPL, TMP
 
-    ; init ports
-    clr O
-    ldi TMP, 0xDF
-    out DDRA, TMP
-    out DDRB, O
-    out DDRC, O
-
-    out PORTA, O
-    out PORTB, O
-    out PORTC, O
-
     ; init vars
     ldi Position, 0b00010000
+    ldi TMP, 1
+    mov ONE, TMP
+    mov b0, ONE
     mov b1, O
     mov b2, O
     mov basic_shift, O
@@ -233,17 +241,29 @@ init_board:
     mov REGIME, O
     mov shift_counter, O
     mov new_shift, O
-
-    ldi TMP, 1
-    mov ONE, TMP
-    mov b0, ONE
-
+    mov seg7_counter, O
     ldi TMP, 4
     mov step, TMP
+
+    ; init ports
+    clr O
+    ldi TMP, 0b11011111
+    out DDRA, TMP
+    ldi TMP, 0xff
+    out DDRB, TMP
+    out DDRC, TMP
+	ldi TMP, 0b11110011
+	out DDRD, TMP
+
+    out PORTA, O
+    out PORTB, O
+    out PORTC, O
+    out PORTD, O
+
 	; bliding lights timer
 	LDI TMP, 0b00001101
 	OUT TCCR0, TMP
-	LDI TMP, 78                 ; ~0,01 sec
+	LDI TMP, 39                 ; ~0,005 sec
 	OUT OCR0, TMP
 	LDI TMP, 0b00000010
 	OUT TIMSK, TMP
@@ -269,11 +289,11 @@ init_board:
 
     ; INTERRUPTS init
     LDI TMP, 0x0F
-    OUT MCUCR, TMP      ; Настройка прерываний int0 и int1 на условие 0/1
+    OUT MCUCR, TMP      
     LDI TMP, 0b11000000
-    OUT GICR, TMP       ; Разрешение прерываний int0 и int1
-    OUT GIFR, TMP       ; Предотвращение срабатывания int0 и int1 при
-    			        ; включении прерываний
+    OUT GICR, TMP       
+    OUT GIFR, TMP       
+
     SEI
 ; End Board Init =============================================
 
@@ -282,13 +302,13 @@ main:
     cp REGIME, ONE
     breq PARAMS_REGIME
 
-    call init_lights
+    clr shift_counter
 LIGHTS_REGIME:
     cp REGIME, O
     breq LIGHTS_REGIME
 PARAMS_REGIME:
     cpi paramNumber, 5
-    brlo main
+    brlt main
     cp REGIME, O
     breq main
 
@@ -310,35 +330,51 @@ PARAMS_REGIME:
     mov basic_shift, new_shift
     mov outValue, basic_shift
     call convert_for_7seg
-    mov outp_4, outValue
+    mov outp_4_safe, outValue
+    call make_basic_shift
     
     jmp PARAMS_REGIME
 ; Procedures =================================================
-init_lights:
-    mov b0, ONE
-    mov b1, O
-    mov b2, O
+make_basic_shift:
+    push shift_counter
+    push TMP
     clr shift_counter
+    mov b0, ONE
+    cp basic_shift, O
+    breq basic_shift_loop_end
+
+
 basic_shift_loop:
     mov TMP, b0
     rol TMP
-    rol b2
     rol b1
+    rol b2
     rol b0
+
     inc shift_counter
-    cp shift_counter, basic_shift
-    brlo basic_shift_loop
+    cp shift_counter, basic_shift            ; shift size; can be changed
+    brlt basic_shift_loop
+basic_shift_loop_end:
+    pop TMP
+    pop shift_counter
     ret
+
+; turning timers =============================================
 turn_off_small_timer:
+	push TMP_2
 	in TMP_2, TIMSK
 	ANDI TMP_2, 0b01111111
 	OUT TIMSK, TMP_2
+	pop TMP_2
 	ret
 turn_on_small_timer:
+	push TMP_2
 	in TMP_2, TIMSK
 	ORI TMP_2, 0b10000000
 	out TIMSK, TMP_2
+	pop TMP_2
 	ret
+; ============================================================
 
 convert_b_and_put_to_outpVars:
     cpi outValue, 0x10
@@ -350,25 +386,26 @@ convert_b_and_put_to_outpVars:
     breq b_val_40
 b_val_10:
     call place_one
-    mov outp_3, outValue
+    mov outp_3_safe, outValue
     jmp first_b_val_exit
 b_val_20:
     call place_two
-    mov outp_3, outValue
+    mov outp_3_safe, outValue
     jmp first_b_val_exit
 b_val_40:
     call place_four
-    mov outp_3, outValue
+    mov outp_3_safe, outValue
 first_b_val_exit:
     call place_zero
-    mov outp_4, outValue
+    mov outp_4_safe, outValue
     ret
 get_second_val_from_b:
-    mov outp_3, O
+    mov outp_3_safe, O
     call convert_for_7seg
-    mov outp_4, outValue
+    mov outp_4_safe, outValue
     ret
 
+; Convert =================================================
 convert_for_7seg:
 	CPI outValue, 0
 	BREQ place_zero
@@ -417,7 +454,7 @@ place_b:        LDI outValue, 0b01111100
     ret
 place_c:        LDI outValue, 0b00111001
     ret
-place_d:        LDI outValue, 0b00111110
+place_d:        LDI outValue, 0b01011110
     ret
 place_e:        LDI outValue, 0b01111001
     ret
